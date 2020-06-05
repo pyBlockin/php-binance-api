@@ -570,12 +570,12 @@ class API
             "asset" => $asset,
             "address" => $address,
             "amount" => $amount,
-            "transactionFeeFlag" => $transactionFeeFlag,
+//             "transactionFeeFlag" => $transactionFeeFlag,
             "wapi" => true,
         ];
-        if (is_null($addressName) === false && empty($addressName) === false) {
-            $options['name'] = $addressName;
-        }
+//         if (is_null($addressName) === false && empty($addressName) === false) {
+//             $options['name'] = $addressName;
+//         }
         if (is_null($addressTag) === false && empty($addressTag) === false) {
             $options['addressTag'] = $addressTag;
         }
