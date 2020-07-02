@@ -29,6 +29,7 @@ class API
 {
     protected $base = 'https://api.binance.com/api/'; // /< REST endpoint for the currency exchange
     protected $wapi = 'https://api.binance.com/wapi/'; // /< REST endpoint for the withdrawals
+    protected $sapi = 'https://api.binance.com/sapi/'; // /< REST endpoint for the supporting network API
     protected $stream = 'wss://stream.binance.com:9443/ws/'; // /< Endpoint for establishing websocket connections
     protected $api_key; // /< API key that you created in the binance website member area
     protected $api_secret; // /< API secret that was given to you when you created the api key
@@ -45,15 +46,18 @@ class API
     protected $transfered = 0; // /< This stores the amount of bytes transfered
     protected $requestCount = 0; // /< This stores the amount of API requests
     protected $httpDebug = false; // /< If you enable this, curl will output debugging information
-    private $subscriptions = []; // /< View all websocket subscriptions
-    private $btc_value = 0.00; // /< value of available assets
-    private $btc_total = 0.00;
+    protected $subscriptions = []; // /< View all websocket subscriptions
+    protected $btc_value = 0.00; // /< value of available assets
+    protected $btc_total = 0.00;
 
     // /< value of available onOrder assets
     
     protected $exchangeInfo = NULL;
-    protected $query_logs = [];
-    
+    protected $lastRequest = [];
+
+    protected $xMbxUsedWeight = 0;
+    protected $xMbxUsedWeight1m = 0;
+
     /**
      * Constructor for the class,
      * send as many argument as you want.
@@ -88,7 +92,7 @@ class API
     }
 
     /**
-     * magic get for private and protected members
+     * magic get for protected and protected members
      *
      * @param $file string the name of the property to return
      * @return null
@@ -102,7 +106,7 @@ class API
     }
 
     /**
-     * magic set for private and protected members
+     * magic set for protected and protected members
      *
      * @param $member string the name of the member property
      * @param $value the value of the member property
@@ -120,7 +124,7 @@ class API
      * @param $file string file location
      * @return null
      */
-    private function setupApiConfigFromFile(string $file = null)
+    protected function setupApiConfigFromFile(string $file = null)
     {
         $file = is_null($file) ? getenv("HOME") . "/.config/jaggedsoft/php-binance-api.json" : $file;
 
@@ -145,7 +149,7 @@ class API
      * @param $file string file location
      * @return null
      */
-    private function setupCurlOptsFromFile(string $file = null)
+    protected function setupCurlOptsFromFile(string $file = null)
     {
         $file = is_null($file) ? getenv("HOME") . "/.config/jaggedsoft/php-binance-api.json" : $file;
 
@@ -168,7 +172,7 @@ class API
      *
      * @return null
      */
-    private function setupProxyConfigFromFile(string $file = null)
+    protected function setupProxyConfigFromFile(string $file = null)
     {
         $file = is_null($file) ? getenv("HOME") . "/.config/jaggedsoft/php-binance-api.json" : $file;
 
@@ -564,7 +568,7 @@ class API
      * @return array with error message or array transaction
      * @throws \Exception
      */
-    public function withdraw(string $asset, string $address, $amount, $addressTag = null, $addressName = "API Withdraw", bool $transactionFeeFlag = false)
+    public function withdraw(string $asset, string $address, $amount, $addressTag = null, $addressName = "API Withdraw", bool $transactionFeeFlag = false,$network = null)
     {
         $options = [
             "asset" => $asset,
@@ -578,6 +582,9 @@ class API
 //         }
         if (is_null($addressTag) === false && empty($addressTag) === false) {
             $options['addressTag'] = $addressTag;
+        }
+        if (is_null($network) === false && empty($network) === false) {
+            $options['network'] = $network;
         }
         return $this->httpRequest("v3/withdraw.html", "POST", $options, true);
     }
@@ -926,6 +933,12 @@ class API
                 unset($params['wapi']);
                 $base = $this->wapi;
             }
+		
+            if (isset($params['sapi'])) {
+                unset($params['sapi']);
+                $base = $this->sapi;
+            }
+		
             $query = http_build_query($params, '', '&');
             $signature = hash_hmac('sha256', $query, $this->api_secret);
             if ($method === "POST") {
@@ -1008,14 +1021,22 @@ class API
         
         $json = json_decode($output, true);
         
-        $this->query_logs[] = [
+        $this->lastRequest = [
             'url' => $url,
             'method' => $method,
             'params' => $params,
             'header' => $header,
             'json' => $json
         ];
-        
+
+        if (isset($header['x-mbx-used-weight'])) {
+            $this->setXMbxUsedWeight($header['x-mbx-used-weight']);
+        }
+
+        if (isset($header['x-mbx-used-weight-1m'])) {
+            $this->setXMbxUsedWeight1m($header['x-mbx-used-weight-1m']);
+        }
+
         if(isset($json['msg'])){
             // should always output error, not only on httpdebug
             // not outputing errors, hides it from users and ends up with tickets on github
@@ -1157,7 +1178,7 @@ class API
      * @param $priceData array of prices
      * @return array containing the response
      */
-    private function balanceData(array $array, $priceData)
+    protected function balanceData(array $array, $priceData)
     {
         $balances = [];
 
@@ -1240,7 +1261,7 @@ class API
      * @param $json array data to convert
      * @return array
      */
-    private function balanceHandler(array $json)
+    protected function balanceHandler(array $json)
     {
         $balances = [];
         foreach ($json as $item) {
@@ -1263,7 +1284,7 @@ class API
      * @param $json object data to convert
      * @return array
      */
-    private function tickerStreamHandler(\stdClass $json)
+    protected function tickerStreamHandler(\stdClass $json)
     {
         return [
             "eventType" => $json->e,
@@ -1300,7 +1321,7 @@ class API
      * @param \stdClass $json object data to convert
      * @return array
      */
-    private function executionHandler(\stdClass $json)
+    protected function executionHandler(\stdClass $json)
     {
         return [
             "symbol" => $json->s,
@@ -1328,7 +1349,7 @@ class API
      * @param $ticks array of the canbles array
      * @return array object of the chartdata
      */
-    private function chartData(string $symbol, string $interval, array $ticks)
+    protected function chartData(string $symbol, string $interval, array $ticks)
     {
         if (!isset($this->info[$symbol])) {
             $this->info[$symbol] = [];
@@ -1373,7 +1394,7 @@ class API
      * @param $trades array of trade information
      * @return array easier format for trade information
      */
-    private function tradesData(array $trades)
+    protected function tradesData(array $trades)
     {
         $output = [];
         foreach ($trades as $trade) {
@@ -1399,7 +1420,7 @@ class API
      * @param $array array book prices
      * @return array easier format for book prices information
      */
-    private function bookPriceData(array $array)
+    protected function bookPriceData(array $array)
     {
         $bookprices = [];
         foreach ($array as $obj) {
@@ -1421,7 +1442,7 @@ class API
      * @param $array array of prices
      * @return array of key/value pairs
      */
-    private function priceData(array $array)
+    protected function priceData(array $array)
     {
         $prices = [];
         foreach ($array as $obj) {
@@ -1565,7 +1586,7 @@ class API
      * @param $json array of the depth infomration
      * @return array of the depth information
      */
-    private function depthData(string $symbol, array $json)
+    protected function depthData(string $symbol, array $json)
     {
         $bids = $asks = [];
         foreach ($json['bids'] as $obj) {
@@ -1664,7 +1685,7 @@ class API
      * @param $json array of depth bids and asks
      * @return null
      */
-    private function depthHandler(array $json)
+    protected function depthHandler(array $json)
     {
         $symbol = $json['s'];
         if ($json['u'] <= $this->info[$symbol]['firstUpdate']) {
@@ -1697,7 +1718,7 @@ class API
      * @param \stdClass $json object time
      * @return null
      */
-    private function chartHandler(string $symbol, string $interval, \stdClass $json)
+    protected function chartHandler(string $symbol, string $interval, \stdClass $json)
     {
         if (!$this->info[$symbol][$interval]['firstOpen']) { // Wait for /kline to finish loading
             $this->chartQueue[$symbol][$interval][] = $json;
@@ -2299,7 +2320,7 @@ class API
      * This function downloads ca bundle for curl website
      * and uses it as part of the curl options
      */
-    private function downloadCurlCaBundle()
+    protected function downloadCurlCaBundle()
     {
         $output_filename = getcwd() . "/ca.pem";
 
@@ -2343,9 +2364,26 @@ class API
         fclose($fp);
     }
     
-    private function floorDecimal($n, $decimals=2)
+    protected function floorDecimal($n, $decimals=2)
     {   
         return floor($n * pow(10, $decimals)) / pow(10, $decimals);
+    }
+
+
+    protected function setXMbxUsedWeight (int $usedWeight) : void {
+        $this->xMbxUsedWeight = $usedWeight;
+    }
+
+    protected function setXMbxUsedWeight1m (int $usedWeight1m) : void {
+        $this->xMbxUsedWeight1m = $usedWeight1m;
+    }
+
+    public function getXMbxUsedWeight () : int {
+        $this->xMbxUsedWeight;
+    }
+
+    public function getXMbxUsedWeight1m () : int {
+        $this->xMbxUsedWeight1m;
     }
     
 }
